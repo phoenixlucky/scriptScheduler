@@ -1,0 +1,14 @@
+{
+  "name": "weipython-script-scheduler",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WeiPython scheduled task manager for running Python scripts with configurable environments and cron schedules.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3"
+  }
+}
