@@ -1,5 +1,5 @@
 const path = require("path");
-const { app, BrowserWindow, Menu, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog } = require("electron");
 const packageJson = require("./package.json");
 
 let mainWindow = null;
@@ -7,11 +7,22 @@ let startServer;
 let stopServer;
 
 function showAboutDialog() {
+  const detailLines = [
+    `产品名称: ${app.getName()}`,
+    `版本: ${app.getVersion()}`,
+    "作者: Ethan Wilkins",
+    "定位: 面向 Python 脚本的桌面定时任务调度工具",
+    packageJson.description,
+    `Electron: ${process.versions.electron}`,
+    `Node.js: ${process.versions.node}`,
+    `数据目录: ${app.getPath("userData")}`,
+  ];
+
   dialog.showMessageBox({
     type: "info",
     title: "关于 WeiScheduler",
     message: "WeiScheduler",
-    detail: [`版本: ${packageJson.version}`, packageJson.description, `数据目录: ${app.getPath("userData")}`].join("\n"),
+    detail: detailLines.join("\n"),
     buttons: ["确定"],
     icon: path.join(__dirname, "build", "icon.ico"),
   });
@@ -28,7 +39,7 @@ function buildApplicationMenu() {
   const openAtLogin = app.getLoginItemSettings().openAtLogin;
   const template = [
     {
-      label: "WeiScheduler",
+      label: "设置",
       submenu: [
         {
           label: "开机自启动",
@@ -38,33 +49,10 @@ function buildApplicationMenu() {
             setOpenAtLogin(menuItem.checked);
           },
         },
-        {
-          label: "打开数据目录",
-          click: () => {
-            shell.openPath(app.getPath("userData"));
-          },
-        },
-        { type: "separator" },
-        {
-          label: "关于 WeiScheduler",
-          click: showAboutDialog,
-        },
-        { type: "separator" },
-        { role: "quit", label: "退出" },
       ],
     },
     {
-      label: "窗口",
-      submenu: [
-        { role: "reload", label: "重新加载" },
-        { role: "forceReload", label: "强制重新加载" },
-        { type: "separator" },
-        { role: "minimize", label: "最小化" },
-        { role: "togglefullscreen", label: "切换全屏" },
-      ],
-    },
-    {
-      label: "帮助",
+      label: "关于",
       submenu: [
         {
           label: "关于 WeiScheduler",

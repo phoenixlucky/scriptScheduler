@@ -1,9 +1,9 @@
 {
   "name": "weischeduler",
-  "version": "1.1.1",
+  "version": "1.1.4",
   "private": true,
-  "author": "WeiScheduler",
-  "description": "WeiScheduler scheduled task manager for running Python scripts with configurable environments and cron schedules.",
+  "author": "Ethan Wilkins",
+  "description": "WeiScheduler is a desktop scheduled task manager for running Python scripts with configurable environments, logging, and cron schedules.",
   "main": "electron-main.js",
   "scripts": {
     "start": "electron .",
@@ -21,6 +21,7 @@
   "build": {
     "appId": "com.weischeduler.desktop",
     "productName": "WeiScheduler",
+    "copyright": "Copyright © 2026 Ethan Wilkins",
     "directories": {
       "output": "release"
     },
@@ -32,8 +33,13 @@
       "build/icon.ico",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
     "win": {
-      "signAndEditExecutable": false,
       "target": [
         {
           "target": "nsis",
@@ -48,9 +54,9 @@
       "oneClick": false,
       "perMachine": true,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "build/installerIcon.ico",
-      "uninstallerIcon": "build/uninstallerIcon.ico",
-      "installerHeaderIcon": "build/installerHeaderIcon.ico",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
       "installerSidebar": "build/installerSidebar.bmp",
       "installerHeader": "build/installerHeader.bmp",
       "shortcutName": "WeiScheduler",

@@ -3,4 +3,5 @@ data/
 npm-debug.log*
 dist/
 release/
+release-build/
 *.log
