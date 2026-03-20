@@ -2,6 +2,9 @@ const taskForm = document.getElementById("task-form");
 const taskList = document.getElementById("task-list");
 const resetButton = document.getElementById("reset-form");
 const refreshButton = document.getElementById("refresh-list");
+const exportButton = document.getElementById("export-tasks");
+const importButton = document.getElementById("import-tasks");
+const importFileInput = document.getElementById("import-file");
 const formTitle = document.getElementById("form-title");
 const taskTemplate = document.getElementById("task-template");
 const scheduleInput = document.getElementById("schedule");
@@ -32,16 +35,21 @@ function updateRunnerFields() {
   const commandPathRow = document.getElementById("command-path-row");
   const commandPath = document.getElementById("commandPath");
   const condaTarget = document.getElementById("condaTarget");
+  const commandPathLabel = commandPathRow.querySelector(".field-label");
 
   if (runnerType === "python") {
     commandPathRow.style.display = "grid";
     condaRow.style.display = "none";
     commandPath.required = true;
+    commandPath.placeholder = "例如：D:\\ProgramData\\miniconda3\\envs\\py3143\\python.exe";
+    commandPathLabel.textContent = "Python 路径";
     condaTarget.required = false;
   } else {
-    commandPathRow.style.display = "none";
+    commandPathRow.style.display = "grid";
     condaRow.style.display = "grid";
     commandPath.required = false;
+    commandPath.placeholder = "可选：Miniconda 根目录、Scripts\\conda.exe 或 condabin\\conda.bat";
+    commandPathLabel.textContent = "Conda 根目录或命令路径";
     condaTarget.required = true;
   }
 }
@@ -108,13 +116,12 @@ function describeSchedule(schedule) {
 }
 
 function detailRows(task) {
-  const commandLabel =
-    task.commandPath || task.pythonPath || (task.runnerType === "python" ? "-" : "conda (默认)");
+  const commandLabel = task.commandPath || task.pythonPath || "-";
 
   return [
     ["执行方式", task.runnerType],
     ["命令路径", commandLabel],
-    ["Conda", task.condaTarget || "-"],
+    ["Conda 目标", task.condaTarget || "-"],
     ["脚本", task.scriptPath],
     ["参数", task.args || "-"],
     ["时间参数", task.timeArgName ? `${task.timeArgName} ${task.timeArgValue || "(执行时当前时间)"}` : "-"],
@@ -147,6 +154,55 @@ async function request(url, options = {}) {
   return response.json();
 }
 
+async function exportTasks() {
+  const response = await fetch("/api/tasks-export");
+  if (!response.ok) {
+    throw new Error("导出任务失败");
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const contentDisposition = response.headers.get("Content-Disposition") || "";
+  const fileNameMatch = contentDisposition.match(/filename="(.+)"/i);
+  const fileName = fileNameMatch ? fileNameMatch[1] : "weischeduler-tasks.json";
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function importTasks(file) {
+  const text = await file.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (_error) {
+    throw new Error("导入文件不是有效的 JSON");
+  }
+
+  const result = await request("/api/tasks-import", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return result?.imported || 0;
+}
+
+async function triggerManualRun(taskId) {
+  await request(`/api/tasks/${taskId}/run`, { method: "POST" });
+  await loadTasks();
+  if (loadTimer) {
+    window.clearTimeout(loadTimer);
+  }
+  loadTimer = window.setTimeout(() => {
+    loadTasks().catch((error) => {
+      taskList.innerHTML = `<div class="empty-state">${error.message}</div>`;
+    });
+  }, 800);
+}
+
 async function loadTasks() {
   const tasks = await request("/api/tasks");
   taskList.innerHTML = "";
@@ -171,12 +227,23 @@ async function loadTasks() {
     status.classList.toggle("stopped", task.lastStatus === "stopped");
 
     const toggleButton = node.querySelector(".action-toggle");
+    const startButton = node.querySelector(".action-start");
+    const pauseButton = node.querySelector(".action-pause");
+    const headStopButton = node.querySelector(".action-stop-head");
+    const runOnceButton = node.querySelector(".action-run-once");
     const stopButton = node.querySelector(".action-stop");
+    const clearLogsButton = node.querySelector(".action-clear-logs");
     const isCollapsed = !expandedTaskIds.has(task.id);
     node.classList.toggle("collapsed", isCollapsed);
     toggleButton.textContent = isCollapsed ? "展开详情" : "折叠详情";
+    startButton.disabled = task.enabled;
+    pauseButton.disabled = !task.enabled;
+    runOnceButton.disabled = task.running;
+    headStopButton.disabled = !task.running;
+    headStopButton.textContent = task.liveLog?.stopRequested ? "终止中" : "终止";
     stopButton.disabled = !task.running;
     stopButton.textContent = task.liveLog?.stopRequested ? "终止中..." : "终止任务";
+    clearLogsButton.disabled = !(task.logs && task.logs.length);
 
     node.querySelector(".task-detail").innerHTML = detailRows(task);
     node.querySelector(".task-log").textContent = renderLog(task);
@@ -210,18 +277,59 @@ async function loadTasks() {
       window.scrollTo({ top: 0, behavior: "smooth" });
     });
 
-    node.querySelector(".action-run").addEventListener("click", async () => {
+    startButton.addEventListener("click", async () => {
       try {
-        await request(`/api/tasks/${task.id}/run`, { method: "POST" });
+        await request(`/api/tasks/${task.id}/start`, { method: "POST" });
         await loadTasks();
       } catch (error) {
         alert(error.message);
       }
     });
 
-    stopButton.addEventListener("click", async () => {
+    pauseButton.addEventListener("click", async () => {
+      try {
+        await request(`/api/tasks/${task.id}/pause`, { method: "POST" });
+        await loadTasks();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    runOnceButton.addEventListener("click", async () => {
+      try {
+        await triggerManualRun(task.id);
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    node.querySelector(".action-run").addEventListener("click", async () => {
+      try {
+        await triggerManualRun(task.id);
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    const stopTask = async () => {
       try {
         await request(`/api/tasks/${task.id}/stop`, { method: "POST" });
+        await loadTasks();
+      } catch (error) {
+        alert(error.message);
+      }
+    };
+
+    stopButton.addEventListener("click", stopTask);
+    headStopButton.addEventListener("click", stopTask);
+
+    clearLogsButton.addEventListener("click", async () => {
+      const confirmed = window.confirm(`确认清除任务“${task.name}”的最近日志吗？`);
+      if (!confirmed) {
+        return;
+      }
+      try {
+        await request(`/api/tasks/${task.id}/logs`, { method: "DELETE" });
         await loadTasks();
       } catch (error) {
         alert(error.message);
@@ -288,6 +396,32 @@ taskForm.addEventListener("submit", async (event) => {
 
 resetButton.addEventListener("click", resetForm);
 refreshButton.addEventListener("click", loadTasks);
+exportButton.addEventListener("click", async () => {
+  try {
+    await exportTasks();
+  } catch (error) {
+    alert(error.message);
+  }
+});
+importButton.addEventListener("click", () => {
+  importFileInput.click();
+});
+importFileInput.addEventListener("change", async (event) => {
+  const [file] = event.target.files || [];
+  if (!file) {
+    return;
+  }
+
+  try {
+    const imported = await importTasks(file);
+    alert(`已导入 ${imported} 个任务`);
+    await loadTasks();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    importFileInput.value = "";
+  }
+});
 document.getElementById("runnerType").addEventListener("change", updateRunnerFields);
 document.querySelectorAll(".cron-preset").forEach((button) => {
   button.addEventListener("click", () => {

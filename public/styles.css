@@ -107,6 +107,13 @@ body {
   margin-bottom: 18px;
 }
 
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .section-head h2 {
   margin: 0;
   font-size: 1.2rem;
@@ -233,6 +240,20 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.task-quick-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.task-quick-actions .ghost-button {
+  padding: 8px 12px;
+  font-size: 0.84rem;
 }
 
 .task-title-group {
@@ -317,6 +338,7 @@ body {
 
 .task-actions {
   margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 
 .log-block h4 {
@@ -348,5 +370,20 @@ body {
   .hero,
   .layout {
     grid-template-columns: 1fr;
+  }
+
+  .section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .task-card-head {
+    flex-direction: column;
+  }
+
+  .task-card-tools,
+  .task-quick-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 }

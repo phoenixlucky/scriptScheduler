@@ -48,11 +48,11 @@
             </label>
 
             <label id="command-path-row">
-              Python/Conda 命令路径
+              <span class="field-label">Python 路径</span>
               <input
                 id="commandPath"
                 name="commandPath"
-                placeholder="Python 模式填写 python.exe；Conda 模式可选，留空时默认使用 conda"
+                placeholder="例如：D:\ProgramData\miniconda3\envs\py3143\python.exe"
               />
             </label>
 
@@ -122,7 +122,12 @@
         <section class="panel">
           <div class="section-head">
             <h2>任务列表</h2>
-            <button id="refresh-list" class="ghost-button" type="button">刷新</button>
+            <div class="toolbar-actions">
+              <input id="import-file" type="file" accept="application/json" hidden />
+              <button id="import-tasks" class="ghost-button" type="button">导入</button>
+              <button id="export-tasks" class="ghost-button" type="button">导出</button>
+              <button id="refresh-list" class="ghost-button" type="button">刷新</button>
+            </div>
           </div>
           <div id="task-list" class="task-list"></div>
         </section>
@@ -140,6 +145,12 @@
             <p class="task-meta"></p>
           </div>
           <div class="task-card-tools">
+            <div class="task-quick-actions">
+              <button class="ghost-button action-start" type="button">启动</button>
+              <button class="ghost-button action-pause" type="button">暂停</button>
+              <button class="ghost-button danger action-stop-head" type="button">终止</button>
+              <button class="ghost-button action-run-once" type="button">立即执行1次</button>
+            </div>
             <button class="ghost-button action-toggle" type="button">折叠详情</button>
             <span class="task-status"></span>
           </div>
@@ -149,6 +160,7 @@
           <div class="task-actions">
             <button class="ghost-button action-edit" type="button">编辑</button>
             <button class="ghost-button action-run" type="button">立即执行</button>
+            <button class="ghost-button action-clear-logs" type="button">清除日志</button>
             <button class="ghost-button danger action-stop" type="button">终止任务</button>
             <button class="ghost-button danger action-delete" type="button">删除</button>
           </div>

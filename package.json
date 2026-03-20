@@ -1,6 +1,6 @@
 {
   "name": "weischeduler",
-  "version": "1.0.2",
+  "version": "1.0.8",
   "private": true,
   "author": "WeiScheduler",
   "description": "WeiScheduler scheduled task manager for running Python scripts with configurable environments and cron schedules.",

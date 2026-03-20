@@ -68,6 +68,17 @@ function appendRunLog(taskId, log) {
   writeStore(store);
 }
 
+function clearTaskLogs(taskId) {
+  const store = readStore();
+  const task = store.tasks.find((item) => item.id === taskId);
+  if (!task) {
+    return null;
+  }
+  task.logs = [];
+  writeStore(store);
+  return task;
+}
+
 function clearActiveRun(_taskId) {}
 
 module.exports = {
@@ -77,5 +88,6 @@ module.exports = {
   saveTask,
   deleteTask,
   appendRunLog,
+  clearTaskLogs,
   clearActiveRun,
 };

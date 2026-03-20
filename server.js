@@ -1,6 +1,8 @@
 const express = require("express");
+const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
+const iconv = require("iconv-lite");
 const { spawn, execFile } = require("child_process");
 const {
   ensureStore,
@@ -9,6 +11,7 @@ const {
   saveTask,
   deleteTask,
   appendRunLog,
+  clearTaskLogs,
   clearActiveRun,
 } = require("./storage");
 
@@ -65,6 +68,69 @@ function normalizeTask(payload) {
   return task;
 }
 
+function cloneForExport(task) {
+  return {
+    ...task,
+    logs: Array.isArray(task.logs) ? task.logs : [],
+  };
+}
+
+function generateTaskId(existingIds) {
+  let candidate = `task_${Date.now()}`;
+  while (existingIds.has(candidate)) {
+    candidate = `task_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  }
+  existingIds.add(candidate);
+  return candidate;
+}
+
+function importTasks(items) {
+  if (!Array.isArray(items) || !items.length) {
+    throw new Error("导入内容不能为空");
+  }
+
+  const existingTasks = getTasks();
+  const existingIds = new Set(existingTasks.map((task) => task.id));
+  const existingByName = new Map(existingTasks.map((task) => [task.name, task]));
+  const imported = [];
+
+  for (const rawItem of items) {
+    const candidate = normalizeTask(rawItem);
+    const matchedByName = existingByName.get(candidate.name);
+
+    if (matchedByName) {
+      candidate.id = matchedByName.id;
+      candidate.createdAt = matchedByName.createdAt;
+    } else if (existingIds.has(candidate.id)) {
+      candidate.id = generateTaskId(existingIds);
+    }
+
+    existingIds.add(candidate.id);
+    existingByName.set(candidate.name, candidate);
+    saveTask(candidate);
+    scheduleTask(candidate);
+    imported.push(candidate);
+  }
+
+  return imported;
+}
+
+function setTaskEnabled(taskId, enabled) {
+  const existing = getTask(taskId);
+  if (!existing) {
+    return null;
+  }
+
+  const task = {
+    ...existing,
+    enabled,
+    updatedAt: new Date().toISOString(),
+  };
+  saveTask(task);
+  scheduleTask(task);
+  return task;
+}
+
 function splitArgs(argsText) {
   if (!argsText) {
     return [];
@@ -118,6 +184,118 @@ function formatTimeArgValue(value) {
   return value;
 }
 
+function decodeProcessChunk(chunk) {
+  const utf8Text = chunk.toString("utf8");
+  if (!utf8Text.includes("�")) {
+    return utf8Text;
+  }
+
+  const gbkText = iconv.decode(chunk, "cp936");
+  const utf8ReplacementCount = (utf8Text.match(/�/g) || []).length;
+  const gbkReplacementCount = (gbkText.match(/�/g) || []).length;
+
+  return gbkReplacementCount <= utf8ReplacementCount ? gbkText : utf8Text;
+}
+
+function stripWrappingQuotes(value) {
+  return String(value || "").trim().replace(/^"(.*)"$/, "$1");
+}
+
+function dedupePaths(paths) {
+  return [...new Set(paths.filter(Boolean).map((item) => path.normalize(item)))];
+}
+
+function getHomeDirCandidates() {
+  return dedupePaths([
+    process.env.USERPROFILE,
+    process.env.HOMEDRIVE && process.env.HOMEPATH ? `${process.env.HOMEDRIVE}${process.env.HOMEPATH}` : "",
+    process.env.HOME,
+  ]);
+}
+
+function getDefaultCondaBaseCandidates() {
+  const homeDirs = getHomeDirCandidates();
+  const candidates = [
+    "D:\\ProgramData\\miniconda3",
+    "C:\\ProgramData\\miniconda3",
+    "D:\\Miniconda3",
+    "C:\\Miniconda3",
+    "D:\\Anaconda3",
+    "C:\\Anaconda3",
+  ];
+
+  for (const homeDir of homeDirs) {
+    candidates.push(path.join(homeDir, "miniconda3"));
+    candidates.push(path.join(homeDir, "anaconda3"));
+    candidates.push(path.join(homeDir, "AppData", "Local", "miniconda3"));
+    candidates.push(path.join(homeDir, "AppData", "Local", "anaconda3"));
+  }
+
+  return dedupePaths(candidates.filter((candidate) => fs.existsSync(candidate)));
+}
+
+function resolveCondaBaseCandidates(commandPath) {
+  const input = stripWrappingQuotes(commandPath);
+  const candidates = [];
+
+  if (input) {
+    const normalized = path.normalize(input);
+    if (fs.existsSync(normalized)) {
+      const stats = fs.statSync(normalized);
+      if (stats.isDirectory()) {
+        candidates.push(normalized);
+      } else {
+        const parentDir = path.dirname(normalized);
+        const parentName = path.basename(parentDir).toLowerCase();
+        if (parentName === "scripts" || parentName === "condabin") {
+          candidates.push(path.dirname(parentDir));
+        }
+      }
+    } else {
+      const parentDir = path.dirname(normalized);
+      const parentName = path.basename(parentDir).toLowerCase();
+      if (parentName === "scripts" || parentName === "condabin") {
+        candidates.push(path.dirname(parentDir));
+      }
+    }
+  }
+
+  if (process.env.CONDA_ROOT) {
+    candidates.push(process.env.CONDA_ROOT);
+  }
+  if (process.env.CONDA_EXE) {
+    candidates.push(path.dirname(path.dirname(process.env.CONDA_EXE)));
+  }
+
+  return dedupePaths([...candidates, ...getDefaultCondaBaseCandidates()]);
+}
+
+function resolveCondaPython(task) {
+  if (task.runnerType === "conda-path") {
+    const prefix = stripWrappingQuotes(task.condaTarget);
+    const pythonPath = path.join(prefix, "python.exe");
+    if (!fs.existsSync(pythonPath)) {
+      throw new Error(`未找到 Conda 环境解释器: ${pythonPath}`);
+    }
+    return pythonPath;
+  }
+
+  const envName = stripWrappingQuotes(task.condaTarget);
+  const baseCandidates = resolveCondaBaseCandidates(task.commandPath || task.pythonPath);
+  const pythonCandidates = baseCandidates.map((basePath) =>
+    envName.toLowerCase() === "base" ? path.join(basePath, "python.exe") : path.join(basePath, "envs", envName, "python.exe")
+  );
+
+  for (const candidate of dedupePaths(pythonCandidates)) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  const searched = pythonCandidates.length ? pythonCandidates.join(" ; ") : "未提供候选路径";
+  throw new Error(`无法解析 Conda 环境 ${envName} 的 python.exe。已检查: ${searched}`);
+}
+
 function buildExecution(task) {
   const commandPath = task.commandPath || task.pythonPath;
   const baseArgs = splitArgs(task.args);
@@ -128,15 +306,15 @@ function buildExecution(task) {
 
   if (task.runnerType === "conda-name") {
     return {
-      command: commandPath || "conda",
-      args: ["run", "-n", task.condaTarget, "python", ...scriptArgs],
+      command: resolveCondaPython(task),
+      args: scriptArgs,
     };
   }
 
   if (task.runnerType === "conda-path") {
     return {
-      command: commandPath || "conda",
-      args: ["run", "-p", task.condaTarget, "python", ...scriptArgs],
+      command: resolveCondaPython(task),
+      args: scriptArgs,
     };
   }
 
@@ -183,7 +361,32 @@ async function runTask(taskId, trigger) {
   }
 
   const startedAt = new Date().toISOString();
-  const execution = buildExecution(task);
+  let execution;
+  try {
+    execution = buildExecution(task);
+  } catch (error) {
+    const finishedAt = new Date().toISOString();
+    appendRunLog(taskId, {
+      id: `run_${Date.now()}`,
+      trigger,
+      startedAt,
+      finishedAt,
+      exitCode: -1,
+      status: "failed",
+      command: "",
+      commandArgs: [],
+      stdout: "",
+      stderr: error.message,
+    });
+
+    saveTask({
+      ...task,
+      lastRunAt: finishedAt,
+      lastStatus: "failed",
+    });
+    return;
+  }
+
   const child = spawn(execution.command, execution.args, {
     cwd: task.workingDirectory || path.dirname(task.scriptPath),
     windowsHide: true,
@@ -201,7 +404,7 @@ async function runTask(taskId, trigger) {
   let stderr = "";
 
   child.stdout.on("data", (chunk) => {
-    const text = chunk.toString();
+    const text = decodeProcessChunk(chunk);
     stdout += text;
     const current = activeRunState.get(taskId);
     if (current) {
@@ -210,7 +413,7 @@ async function runTask(taskId, trigger) {
   });
 
   child.stderr.on("data", (chunk) => {
-    const text = chunk.toString();
+    const text = decodeProcessChunk(chunk);
     stderr += text;
     const current = activeRunState.get(taskId);
     if (current) {
@@ -358,8 +561,17 @@ function createApp() {
 
   app.post("/api/tasks/:id/run", async (req, res) => {
     try {
-      await runTask(req.params.id, "manual");
-      return res.json({ ok: true });
+      if (!getTask(req.params.id)) {
+        return res.status(404).json({ error: "任务不存在" });
+      }
+      if (activeProcesses.has(req.params.id)) {
+        return res.status(409).json({ error: "任务正在运行中" });
+      }
+
+      runTask(req.params.id, "manual").catch((error) => {
+        console.error(`Task ${req.params.id} manual run failed:`, error);
+      });
+      return res.status(202).json({ ok: true });
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
@@ -384,6 +596,58 @@ function createApp() {
         current.stopRequested = false;
       }
       return res.status(500).json({ error: `终止任务失败: ${error.message}` });
+    }
+  });
+
+  app.post("/api/tasks/:id/start", (req, res) => {
+    const task = setTaskEnabled(req.params.id, true);
+    if (!task) {
+      return res.status(404).json({ error: "任务不存在" });
+    }
+    return res.json(task);
+  });
+
+  app.post("/api/tasks/:id/pause", (req, res) => {
+    const task = setTaskEnabled(req.params.id, false);
+    if (!task) {
+      return res.status(404).json({ error: "任务不存在" });
+    }
+    return res.json(task);
+  });
+
+  app.delete("/api/tasks/:id/logs", (req, res) => {
+    const task = clearTaskLogs(req.params.id);
+    if (!task) {
+      return res.status(404).json({ error: "任务不存在" });
+    }
+    return res.status(204).end();
+  });
+
+  app.get("/api/tasks-export", (_req, res) => {
+    const tasks = getTasks().map(cloneForExport);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="weischeduler-tasks-${new Date().toISOString().slice(0, 10)}.json"`);
+    return res.send(
+      JSON.stringify(
+        {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          tasks,
+        },
+        null,
+        2
+      )
+    );
+  });
+
+  app.post("/api/tasks-import", (req, res) => {
+    try {
+      const payload = req.body || {};
+      const tasks = Array.isArray(payload) ? payload : payload.tasks;
+      const imported = importTasks(tasks);
+      return res.status(201).json({ imported: imported.length });
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
     }
   });
 
