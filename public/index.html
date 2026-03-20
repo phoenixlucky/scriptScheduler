@@ -9,22 +9,31 @@
   <body>
     <div class="app-shell">
       <header class="hero">
-        <div>
+        <div class="hero-copy-block">
           <p class="eyebrow">WeiScheduler</p>
           <h1>尉Python 定时任务</h1>
           <p class="hero-copy">
             选择指定 Python 环境、脚本路径与 Cron 时间表达式，在网页中创建和运行调度任务。
           </p>
-        </div>
-        <div class="hero-card">
-          <div>示例 Cron</div>
-          <code>0 9 * * 1-5</code>
-          <span>工作日 09:00 执行</span>
+          <div class="hero-stats">
+            <div class="hero-stat">
+              <span class="hero-stat-label">总任务</span>
+              <strong id="hero-total">0</strong>
+            </div>
+            <div class="hero-stat">
+              <span class="hero-stat-label">运行中</span>
+              <strong id="hero-running">0</strong>
+            </div>
+            <div class="hero-stat">
+              <span class="hero-stat-label">已启用</span>
+              <strong id="hero-enabled">0</strong>
+            </div>
+          </div>
         </div>
       </header>
 
       <main class="layout">
-        <section class="panel">
+        <section class="panel panel-form">
           <div class="section-head">
             <h2 id="form-title">新建任务</h2>
             <button id="reset-form" class="ghost-button" type="button">清空</button>
@@ -119,7 +128,7 @@
           </form>
         </section>
 
-        <section class="panel">
+        <section class="panel panel-list">
           <div class="section-head">
             <h2>任务列表</h2>
             <div class="toolbar-actions">

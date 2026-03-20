@@ -8,8 +8,35 @@ const importFileInput = document.getElementById("import-file");
 const formTitle = document.getElementById("form-title");
 const taskTemplate = document.getElementById("task-template");
 const scheduleInput = document.getElementById("schedule");
+const heroTotal = document.getElementById("hero-total");
+const heroRunning = document.getElementById("hero-running");
+const heroEnabled = document.getElementById("hero-enabled");
 let loadTimer = null;
 const expandedTaskIds = new Set();
+
+const beijingDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function formatDisplayTime(value) {
+  if (!value) {
+    return "-";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return beijingDateTimeFormatter.format(date).replace(/\//g, "-");
+}
 
 function formToPayload() {
   const formData = new FormData(taskForm);
@@ -66,7 +93,7 @@ function resetForm() {
 function renderLog(task) {
   if (task.running && task.liveLog) {
     return [
-      `[${task.liveLog.stopRequested ? "stopping" : "running"}] ${task.liveLog.startedAt} -> -`,
+      `[${task.liveLog.stopRequested ? "stopping" : "running"}] ${formatDisplayTime(task.liveLog.startedAt)} -> -`,
       `trigger: ${task.liveLog.trigger}`,
       "exitCode: -",
       "",
@@ -82,7 +109,7 @@ function renderLog(task) {
   }
 
   return [
-    `[${latest.status}] ${latest.startedAt} -> ${latest.finishedAt || "-"}`,
+    `[${latest.status}] ${formatDisplayTime(latest.startedAt)} -> ${formatDisplayTime(latest.finishedAt)}`,
     `trigger: ${latest.trigger}`,
     `exitCode: ${latest.exitCode}`,
     "",
@@ -128,7 +155,7 @@ function detailRows(task) {
     ["目录", task.workingDirectory || "-"],
     ["Cron", task.schedule],
     ["启用", task.enabled ? "是" : "否"],
-    ["最近执行", task.lastRunAt || "从未执行"],
+    ["最近执行", task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"],
   ]
     .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
     .join("");
@@ -206,6 +233,9 @@ async function triggerManualRun(taskId) {
 async function loadTasks() {
   const tasks = await request("/api/tasks");
   taskList.innerHTML = "";
+  heroTotal.textContent = String(tasks.length);
+  heroRunning.textContent = String(tasks.filter((task) => task.running).length);
+  heroEnabled.textContent = String(tasks.filter((task) => task.enabled).length);
 
   if (!tasks.length) {
     taskList.innerHTML = '<div class="empty-state">还没有任务，先在左侧创建一个。</div>';
@@ -217,8 +247,8 @@ async function loadTasks() {
     node.querySelector(".task-name").textContent = task.name;
     node.querySelector(".task-frequency").textContent = describeSchedule(task.schedule);
     node.querySelector(".task-meta").textContent = task.running
-      ? "任务正在运行中"
-      : `状态：${task.lastStatus}`;
+      ? `触发方式：${task.liveLog?.trigger || "manual"} · 开始于 ${formatDisplayTime(task.liveLog?.startedAt)}`
+      : `状态：${task.lastStatus} · 最近执行：${task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"}`;
 
     const status = node.querySelector(".task-status");
     status.textContent = task.running ? (task.liveLog?.stopRequested ? "终止中" : "运行中") : task.lastStatus;
