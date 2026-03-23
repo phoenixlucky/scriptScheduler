@@ -1,6 +1,6 @@
 {
   "name": "weischeduler",
-  "version": "1.1.5",
+  "version": "1.1.9",
   "private": true,
   "author": "Ethan Wilkins",
   "description": "WeiScheduler is a desktop scheduled task manager for running Python scripts with configurable environments, logging, and cron schedules.",

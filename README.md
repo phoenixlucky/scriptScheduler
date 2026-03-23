@@ -2,15 +2,32 @@
 
 一个基于 npm 启动的网页端调度器，用来配置指定 Python 环境中的指定脚本，并按 Cron 时间表达式执行。
 
+当前版本：`1.1.9`
+
+版本更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
+
 ## 功能
 
 - 配置任务名称、Python 可执行文件、脚本路径、参数、工作目录、Cron 表达式
 - 支持直接 Python、Conda 环境名、Conda 环境路径三种执行方式
+- 支持 Cron 五段自由组合输入，并保留常用预设
 - 可选配置时间参数名称和值，执行时自动追加到命令行
 - 启用或禁用调度
 - 立即手动执行任务
+- 手动执行失败时，弹窗显示具体错误内容
+- 任务列表直接显示最近失败原因
 - 保存最近运行日志和状态
 - 使用本地 `data/tasks.json` 持久化任务数据
+- Conda 环境名支持跨机器解析，优先读取 Conda 环境列表，不依赖固定用户名和固定盘符
+
+## 版本亮点
+
+`1.1.9`：
+
+- 提升 Conda 环境名解析稳定性，适配不同电脑上的不同环境目录
+- 手动执行失败时显示更完整的错误详情
+- 修复失败日志丢失后只显示 `failed` 的问题
+- 增强 Cron 配置交互，支持更灵活的时间组合
 
 ## 启动
 
@@ -21,10 +38,16 @@ npm start
 
 打开 `http://localhost:3000`
 
+构建 Windows 安装包：
+
+```bash
+npm run build:installer
+```
+
 ## 字段说明
 
 - `执行方式`: 选择直接 Python 或 Conda 环境
-- `Python/Conda 命令路径`: 直接 Python 时必填 `python.exe`；Conda 模式选填，留空时默认使用系统中的 `conda`
+- `Python/Conda 命令路径`: 直接 Python 时必填 `python.exe`；Conda 模式选填，建议填写 Conda 根目录或 `conda.exe` 路径以提高解析稳定性
 - `Conda 环境名或路径`: Conda 模式必填
 - `脚本路径`: 需要执行的 `.py` 文件
 - `启动参数`: 按命令行形式填写，例如 `--name demo --count 5`
@@ -43,3 +66,10 @@ npm start
 ## 数据文件
 
 任务保存在 `data/tasks.json`。
+
+## Conda 跨机器建议
+
+- 跨电脑共享任务时，优先使用 `Conda 环境名`
+- `Conda 目标` 只填环境名，例如 `py3143`
+- 不要把任务绑定到某一台机器的绝对环境路径，例如 `C:\Users\Administrator\.conda\envs\py3143`
+- 程序会优先通过 Conda 环境列表定位环境，解析不到时再回退到本机目录扫描和 `conda run`

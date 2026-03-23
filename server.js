@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
 const iconv = require("iconv-lite");
-const { spawn, execFile } = require("child_process");
+const { spawn, execFile, execFileSync } = require("child_process");
 const {
   ensureStore,
   getTasks,
@@ -43,6 +43,7 @@ function normalizeTask(payload) {
     updatedAt: now,
     lastRunAt: payload.lastRunAt || null,
     lastStatus: payload.lastStatus || "never",
+    lastError: String(payload.lastError || "").trim(),
     logs: Array.isArray(payload.logs) ? payload.logs : [],
   };
 
@@ -174,6 +175,30 @@ function refreshSchedules() {
   }
 }
 
+function backfillTaskErrors() {
+  for (const task of getTasks()) {
+    if (task.lastStatus !== "failed" || task.lastError) {
+      continue;
+    }
+
+    const failedLog = Array.isArray(task.logs) ? task.logs.find((log) => log?.status === "failed") : null;
+    const lastError = getErrorSummary({
+      stderr: failedLog?.stderr || "",
+      stdout: failedLog?.stdout || "",
+      exitCode: failedLog?.exitCode,
+    });
+
+    if (!lastError) {
+      continue;
+    }
+
+    saveTask({
+      ...task,
+      lastError,
+    });
+  }
+}
+
 function formatTimeArgValue(value) {
   if (!value) {
     return "";
@@ -182,6 +207,56 @@ function formatTimeArgValue(value) {
     return `${value}:00`;
   }
   return value;
+}
+
+function getErrorSummary({ stderr, stdout, exitCode, fallbackMessage }) {
+  const text = [stderr, stdout]
+    .map((value) => String(value || ""))
+    .join("\n");
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) {
+        return false;
+      }
+      if (/^[#><=\-`.\s]+$/.test(line)) {
+        return false;
+      }
+      if (/^#\s*>+/.test(line)) {
+        return false;
+      }
+      return true;
+    });
+
+  const preferredLine = lines.find((line) => {
+    const normalized = line.toLowerCase();
+    return (
+      normalized.includes("error") ||
+      normalized.includes("exception") ||
+      normalized.includes("traceback") ||
+      normalized.includes("failed") ||
+      normalized.includes("cannot") ||
+      normalized.includes("not found") ||
+      normalized.includes("无法") ||
+      normalized.includes("失败") ||
+      normalized.includes("未找到")
+    );
+  });
+
+  if (preferredLine) {
+    return preferredLine;
+  }
+  if (lines.length) {
+    return lines[0];
+  }
+  if (fallbackMessage) {
+    return fallbackMessage;
+  }
+  if (typeof exitCode === "number" && exitCode !== 0) {
+    return `进程退出码 ${exitCode}`;
+  }
+  return "";
 }
 
 function decodeProcessChunk(chunk) {
@@ -270,6 +345,53 @@ function resolveCondaBaseCandidates(commandPath) {
   return dedupePaths([...candidates, ...getDefaultCondaBaseCandidates()]);
 }
 
+function readCondaEnvList(commandPath) {
+  const condaCommand = resolveCondaCommand(commandPath);
+  const queries = [
+    ["env", "list", "--json"],
+    ["info", "--envs", "--json"],
+  ];
+
+  for (const args of queries) {
+    try {
+      const sharedOptions = {
+        encoding: "utf8",
+        windowsHide: true,
+        env: {
+          ...process.env,
+          CONDA_NO_PLUGINS: "true",
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1",
+        },
+      };
+      const stdout = /\.bat$/i.test(condaCommand)
+        ? execFileSync("cmd.exe", ["/d", "/s", "/c", `call "${condaCommand}" ${args.join(" ")}`], sharedOptions)
+        : execFileSync(condaCommand, args, sharedOptions);
+      const payload = JSON.parse(stdout);
+      const envs = Array.isArray(payload?.envs) ? payload.envs : [];
+      if (envs.length) {
+        return envs.map((item) => path.normalize(item));
+      }
+    } catch (_error) {
+      // Fall back to filesystem-based resolution if Conda can't report environments.
+    }
+  }
+
+  return [];
+}
+
+function resolveCondaEnvPrefixByName(envName, commandPath) {
+  const normalizedEnvName = stripWrappingQuotes(envName);
+  const discoveredEnvs = readCondaEnvList(commandPath);
+  const match = discoveredEnvs.find((envPath) => path.basename(envPath).toLowerCase() === normalizedEnvName.toLowerCase());
+
+  if (match) {
+    return match;
+  }
+
+  return null;
+}
+
 function resolveCondaPython(task) {
   if (task.runnerType === "conda-path") {
     const prefix = stripWrappingQuotes(task.condaTarget);
@@ -281,6 +403,14 @@ function resolveCondaPython(task) {
   }
 
   const envName = stripWrappingQuotes(task.condaTarget);
+  const discoveredPrefix = resolveCondaEnvPrefixByName(envName, task.commandPath || task.pythonPath);
+  if (discoveredPrefix) {
+    const discoveredPython = path.join(discoveredPrefix, "python.exe");
+    if (fs.existsSync(discoveredPython)) {
+      return discoveredPython;
+    }
+  }
+
   const baseCandidates = resolveCondaBaseCandidates(task.commandPath || task.pythonPath);
   const pythonCandidates = baseCandidates.map((basePath) =>
     envName.toLowerCase() === "base" ? path.join(basePath, "python.exe") : path.join(basePath, "envs", envName, "python.exe")
@@ -296,6 +426,44 @@ function resolveCondaPython(task) {
   throw new Error(`无法解析 Conda 环境 ${envName} 的 python.exe。已检查: ${searched}`);
 }
 
+function getCondaExecutableCandidates(basePath) {
+  return [
+    path.join(basePath, "Scripts", "conda.exe"),
+    path.join(basePath, "condabin", "conda.exe"),
+    path.join(basePath, "condabin", "conda.bat"),
+    path.join(basePath, "Scripts", "conda.bat"),
+  ];
+}
+
+function resolveCondaCommand(commandPath) {
+  const input = stripWrappingQuotes(commandPath);
+  const directCandidates = [];
+
+  if (input) {
+    const normalized = path.normalize(input);
+    const lowerName = path.basename(normalized).toLowerCase();
+    if (["conda.exe", "conda.bat"].includes(lowerName)) {
+      directCandidates.push(normalized);
+    }
+  }
+
+  const baseCandidates = resolveCondaBaseCandidates(commandPath);
+  const commandCandidates = dedupePaths([
+    ...directCandidates,
+    ...baseCandidates.flatMap((basePath) => getCondaExecutableCandidates(basePath)),
+    process.env.CONDA_EXE,
+  ]);
+
+  for (const candidate of commandCandidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  const searched = commandCandidates.length ? commandCandidates.join(" ; ") : "未提供候选路径";
+  throw new Error(`无法解析 Conda 命令。已检查: ${searched}`);
+}
+
 function buildExecution(task) {
   const commandPath = task.commandPath || task.pythonPath;
   const baseArgs = splitArgs(task.args);
@@ -305,17 +473,43 @@ function buildExecution(task) {
   const scriptArgs = [task.scriptPath, ...baseArgs, ...timeArgs];
 
   if (task.runnerType === "conda-name") {
-    return {
-      command: resolveCondaPython(task),
-      args: scriptArgs,
-    };
+    try {
+      return {
+        command: resolveCondaPython(task),
+        args: scriptArgs,
+      };
+    } catch (error) {
+      return {
+        command: resolveCondaCommand(commandPath),
+        args: ["run", "--no-capture-output", "-n", stripWrappingQuotes(task.condaTarget), "python", ...scriptArgs],
+        env: {
+          CONDA_NO_PLUGINS: "true",
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1",
+        },
+        resolutionError: error.message,
+      };
+    }
   }
 
   if (task.runnerType === "conda-path") {
-    return {
-      command: resolveCondaPython(task),
-      args: scriptArgs,
-    };
+    try {
+      return {
+        command: resolveCondaPython(task),
+        args: scriptArgs,
+      };
+    } catch (error) {
+      return {
+        command: resolveCondaCommand(commandPath),
+        args: ["run", "--no-capture-output", "-p", stripWrappingQuotes(task.condaTarget), "python", ...scriptArgs],
+        env: {
+          CONDA_NO_PLUGINS: "true",
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1",
+        },
+        resolutionError: error.message,
+      };
+    }
   }
 
   return {
@@ -366,6 +560,12 @@ async function runTask(taskId, trigger) {
     execution = buildExecution(task);
   } catch (error) {
     const finishedAt = new Date().toISOString();
+    const lastError = getErrorSummary({
+      stderr: error.message,
+      fallbackMessage: error.message,
+      exitCode: -1,
+    });
+
     appendRunLog(taskId, {
       id: `run_${Date.now()}`,
       trigger,
@@ -379,10 +579,12 @@ async function runTask(taskId, trigger) {
       stderr: error.message,
     });
 
+    const updatedTask = getTask(taskId);
     saveTask({
-      ...task,
+      ...updatedTask,
       lastRunAt: finishedAt,
       lastStatus: "failed",
+      lastError,
     });
     return;
   }
@@ -390,6 +592,10 @@ async function runTask(taskId, trigger) {
   const child = spawn(execution.command, execution.args, {
     cwd: task.workingDirectory || path.dirname(task.scriptPath),
     windowsHide: true,
+    env: {
+      ...process.env,
+      ...(execution.env || {}),
+    },
   });
 
   activeProcesses.set(taskId, child);
@@ -401,7 +607,7 @@ async function runTask(taskId, trigger) {
   });
 
   let stdout = "";
-  let stderr = "";
+  let stderr = execution.resolutionError ? `[conda fallback] ${execution.resolutionError}\n` : "";
 
   child.stdout.on("data", (chunk) => {
     const text = decodeProcessChunk(chunk);
@@ -428,6 +634,14 @@ async function runTask(taskId, trigger) {
       activeRunState.delete(taskId);
       const finishedAt = new Date().toISOString();
       const status = current?.stopRequested ? "stopped" : code === 0 ? "success" : "failed";
+      const lastError =
+        status === "failed"
+          ? getErrorSummary({
+              stderr: stderr.trim(),
+              stdout: stdout.trim(),
+              exitCode: code,
+            })
+          : "";
 
       appendRunLog(taskId, {
         id: `run_${Date.now()}`,
@@ -446,6 +660,7 @@ async function runTask(taskId, trigger) {
         ...getTask(taskId),
         lastRunAt: finishedAt,
         lastStatus: status,
+        lastError,
       });
 
       clearActiveRun(taskId);
@@ -457,6 +672,17 @@ async function runTask(taskId, trigger) {
       activeProcesses.delete(taskId);
       activeRunState.delete(taskId);
       const finishedAt = new Date().toISOString();
+      const status = current?.stopRequested ? "stopped" : "failed";
+      const mergedStderr = `${stderr}\n${error.message}`.trim();
+      const lastError =
+        status === "failed"
+          ? getErrorSummary({
+              stderr: mergedStderr,
+              stdout: stdout.trim(),
+              exitCode: -1,
+              fallbackMessage: error.message,
+            })
+          : "";
 
       appendRunLog(taskId, {
         id: `run_${Date.now()}`,
@@ -464,17 +690,18 @@ async function runTask(taskId, trigger) {
         startedAt,
         finishedAt,
         exitCode: -1,
-        status: current?.stopRequested ? "stopped" : "failed",
+        status,
         command: execution.command,
         commandArgs: execution.args,
         stdout: stdout.trim(),
-        stderr: `${stderr}\n${error.message}`.trim(),
+        stderr: mergedStderr,
       });
 
       saveTask({
         ...getTask(taskId),
         lastRunAt: finishedAt,
-        lastStatus: current?.stopRequested ? "stopped" : "failed",
+        lastStatus: status,
+        lastError,
       });
 
       clearActiveRun(taskId);
@@ -487,6 +714,7 @@ function createApp() {
   const app = express();
 
   ensureStore();
+  backfillTaskErrors();
   app.use(express.json());
   app.use(express.static(path.join(__dirname, "public")));
 

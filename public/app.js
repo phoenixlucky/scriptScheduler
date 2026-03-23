@@ -10,6 +10,11 @@ const autoRefreshIntervalInput = document.getElementById("auto-refresh-interval"
 const formTitle = document.getElementById("form-title");
 const taskTemplate = document.getElementById("task-template");
 const scheduleInput = document.getElementById("schedule");
+const cronMinuteInput = document.getElementById("cron-minute");
+const cronHourInput = document.getElementById("cron-hour");
+const cronDayInput = document.getElementById("cron-day");
+const cronMonthInput = document.getElementById("cron-month");
+const cronWeekdayInput = document.getElementById("cron-weekday");
 const heroTotal = document.getElementById("hero-total");
 const heroRunning = document.getElementById("hero-running");
 const heroEnabled = document.getElementById("hero-enabled");
@@ -17,6 +22,7 @@ const AUTO_REFRESH_ENABLED_KEY = "weischeduler:auto-refresh-enabled";
 const AUTO_REFRESH_INTERVAL_KEY = "weischeduler:auto-refresh-interval";
 let loadTimer = null;
 const expandedTaskIds = new Set();
+const cronPartInputs = [cronMinuteInput, cronHourInput, cronDayInput, cronMonthInput, cronWeekdayInput];
 
 const beijingDateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai",
@@ -137,6 +143,7 @@ function resetForm() {
   document.getElementById("enabled").checked = true;
   document.getElementById("runnerType").value = "python";
   updateRunnerFields();
+  syncCronBuilderFromSchedule("");
   formTitle.textContent = "新建任务";
 }
 
@@ -190,6 +197,155 @@ function describeSchedule(schedule) {
   }
 
   return schedule;
+}
+
+function splitCronExpression(schedule) {
+  const parts = String(schedule || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  return parts.length === 5 ? parts : null;
+}
+
+function syncCronBuilderFromSchedule(schedule) {
+  const parts = splitCronExpression(schedule);
+  cronPartInputs.forEach((input, index) => {
+    input.value = parts ? parts[index] : "";
+  });
+}
+
+function composeCronFromBuilder() {
+  return cronPartInputs
+    .map((input) => String(input.value || "").trim() || "*")
+    .join(" ");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function getLatestTaskLog(task) {
+  return Array.isArray(task?.logs) && task.logs.length ? task.logs[0] : null;
+}
+
+function getMostRelevantFailedLog(task) {
+  if (!Array.isArray(task?.logs) || !task.logs.length) {
+    return null;
+  }
+
+  const failedLog = task.logs.find((log) => log?.status === "failed");
+  return failedLog || task.logs[0];
+}
+
+function getMeaningfulErrorLine(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) {
+        return false;
+      }
+      if (/^[#><=\-`.\s]+$/.test(line)) {
+        return false;
+      }
+      if (/^#\s*>+/.test(line)) {
+        return false;
+      }
+      return true;
+    });
+
+  if (!lines.length) {
+    return "";
+  }
+
+  const preferredLine = lines.find((line) => {
+    const normalized = line.toLowerCase();
+    return (
+      normalized.includes("error") ||
+      normalized.includes("exception") ||
+      normalized.includes("traceback") ||
+      normalized.includes("failed") ||
+      normalized.includes("cannot") ||
+      normalized.includes("not found") ||
+      normalized.includes("无法") ||
+      normalized.includes("失败") ||
+      normalized.includes("未找到")
+    );
+  });
+
+  return preferredLine || lines[0];
+}
+
+function summarizeTaskError(log) {
+  const stderrLine = getMeaningfulErrorLine(log?.stderr || "");
+
+  if (stderrLine) {
+    return stderrLine;
+  }
+
+  const stdoutLine = getMeaningfulErrorLine(log?.stdout || "");
+  if (stdoutLine) {
+    return stdoutLine;
+  }
+
+  if (typeof log?.exitCode === "number" && log.exitCode !== 0) {
+    return `进程退出码 ${log.exitCode}`;
+  }
+
+  return "执行失败，但没有返回更多错误信息";
+}
+
+function buildManualRunFailureDetails(task) {
+  const failedLog = getMostRelevantFailedLog(task);
+  const summary = task.lastError || summarizeTaskError(failedLog);
+  const stderr = String(failedLog?.stderr || "").trim();
+  const stdout = String(failedLog?.stdout || "").trim();
+  const detail = stderr || stdout;
+
+  if (!detail || detail === summary) {
+    return `${task.name} 执行失败：${summary}`;
+  }
+
+  return [
+    `${task.name} 执行失败：${summary}`,
+    "",
+    "详细信息：",
+    detail,
+  ].join("\n");
+}
+
+function buildManualRunError(task) {
+  return buildManualRunFailureDetails(task);
+}
+
+async function waitForManualRunResult(taskId, previousLogId) {
+  const startedAt = Date.now();
+  let sawRunning = false;
+
+  while (Date.now() - startedAt < 120000) {
+    const task = await request(`/api/tasks/${taskId}`);
+    const latest = getLatestTaskLog(task);
+    const hasNewLog = latest && latest.id !== previousLogId;
+
+    if (task.running) {
+      sawRunning = true;
+    }
+
+    if (hasNewLog && !task.running) {
+      return task;
+    }
+
+    if (sawRunning && !task.running) {
+      return task;
+    }
+
+    await sleep(700);
+  }
+
+  return request(`/api/tasks/${taskId}`);
 }
 
 function detailRows(task) {
@@ -268,14 +424,16 @@ async function importTasks(file) {
 }
 
 async function triggerManualRun(taskId) {
+  const beforeTask = await request(`/api/tasks/${taskId}`);
+  const previousLogId = getLatestTaskLog(beforeTask)?.id || null;
   await request(`/api/tasks/${taskId}/run`, { method: "POST" });
+  const task = await waitForManualRunResult(taskId, previousLogId);
   await loadTasks();
-  clearLoadTimer();
-  loadTimer = window.setTimeout(() => {
-    loadTasks().catch((error) => {
-      taskList.innerHTML = `<div class="empty-state">${error.message}</div>`;
-    });
-  }, 800);
+
+  const latest = getLatestTaskLog(task);
+  if (latest?.id !== previousLogId && latest?.status === "failed") {
+    throw new Error(buildManualRunError(task));
+  }
 }
 
 async function loadTasks() {
@@ -294,9 +452,13 @@ async function loadTasks() {
     const node = taskTemplate.content.firstElementChild.cloneNode(true);
     node.querySelector(".task-name").textContent = task.name;
     node.querySelector(".task-frequency").textContent = describeSchedule(task.schedule);
+    const failedLog = getMostRelevantFailedLog(task);
+    const failureText = task.lastStatus === "failed" ? task.lastError || summarizeTaskError(failedLog) : "";
     node.querySelector(".task-meta").textContent = task.running
       ? `触发方式：${task.liveLog?.trigger || "manual"} · 开始于 ${formatDisplayTime(task.liveLog?.startedAt)}`
-      : `状态：${task.lastStatus} · 最近执行：${task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"}`;
+      : task.lastStatus === "failed"
+        ? `状态：failed · 原因：${failureText} · 最近执行：${task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"}`
+        : `状态：${task.lastStatus} · 最近执行：${task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"}`;
 
     const status = node.querySelector(".task-status");
     status.textContent = task.running ? (task.liveLog?.stopRequested ? "终止中" : "运行中") : task.lastStatus;
@@ -349,6 +511,7 @@ async function loadTasks() {
       document.getElementById("timeArgValue").value = task.timeArgValue || "";
       document.getElementById("workingDirectory").value = task.workingDirectory || "";
       document.getElementById("schedule").value = task.schedule;
+      syncCronBuilderFromSchedule(task.schedule);
       document.getElementById("enabled").checked = task.enabled;
       updateRunnerFields();
       formTitle.textContent = `编辑任务: ${task.name}`;
@@ -498,15 +661,25 @@ importFileInput.addEventListener("change", async (event) => {
   }
 });
 document.getElementById("runnerType").addEventListener("change", updateRunnerFields);
+cronPartInputs.forEach((input) => {
+  input.addEventListener("input", () => {
+    scheduleInput.value = composeCronFromBuilder();
+  });
+});
+scheduleInput.addEventListener("input", () => {
+  syncCronBuilderFromSchedule(scheduleInput.value);
+});
 document.querySelectorAll(".cron-preset").forEach((button) => {
   button.addEventListener("click", () => {
     scheduleInput.value = button.dataset.cron || "";
+    syncCronBuilderFromSchedule(scheduleInput.value);
     scheduleInput.focus();
   });
 });
 
 hydrateAutoRefreshPreferences();
 updateRunnerFields();
+syncCronBuilderFromSchedule(scheduleInput.value);
 loadTasks().catch((error) => {
   taskList.innerHTML = `<div class="empty-state">${error.message}</div>`;
 });

@@ -107,6 +107,31 @@
             <label>
               Cron 时间表达式
               <input id="schedule" name="schedule" placeholder="例如：*/10 * * * *" required />
+              <div class="cron-builder">
+                <div class="cron-builder-grid">
+                  <label>
+                    分钟
+                    <input id="cron-minute" placeholder="* / */10 / 0,30" />
+                  </label>
+                  <label>
+                    小时
+                    <input id="cron-hour" placeholder="* / 9 / 9-18" />
+                  </label>
+                  <label>
+                    日
+                    <input id="cron-day" placeholder="* / 1 / 1-5" />
+                  </label>
+                  <label>
+                    月
+                    <input id="cron-month" placeholder="* / 1 / 1,6,12" />
+                  </label>
+                  <label>
+                    周
+                    <input id="cron-weekday" placeholder="* / 1-5 / 0,6" />
+                  </label>
+                </div>
+                <span class="field-help">自由组合 5 段时间，留空会按 `*` 处理。支持 `*`、`*/10`、`1,15,30`、`1-5` 这类 Cron 写法。</span>
+              </div>
               <div class="cron-presets">
                 <button class="ghost-button cron-preset" type="button" data-cron="*/5 * * * *">每 5 分钟</button>
                 <button class="ghost-button cron-preset" type="button" data-cron="0 * * * *">每小时</button>
