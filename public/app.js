@@ -362,6 +362,7 @@ function detailRows(task) {
     ["Cron", task.schedule],
     ["启用", task.enabled ? "是" : "否"],
     ["最近执行", task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"],
+    ["下次执行", task.nextRunAt ? formatDisplayTime(task.nextRunAt) : task.enabled ? "暂未计算" : "已暂停"],
   ]
     .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
     .join("");
@@ -452,13 +453,14 @@ async function loadTasks() {
     const node = taskTemplate.content.firstElementChild.cloneNode(true);
     node.querySelector(".task-name").textContent = task.name;
     node.querySelector(".task-frequency").textContent = describeSchedule(task.schedule);
+    const nextRunText = task.nextRunAt ? formatDisplayTime(task.nextRunAt) : task.enabled ? "暂未计算" : "已暂停";
     const failedLog = getMostRelevantFailedLog(task);
     const failureText = task.lastStatus === "failed" ? task.lastError || summarizeTaskError(failedLog) : "";
     node.querySelector(".task-meta").textContent = task.running
-      ? `触发方式：${task.liveLog?.trigger || "manual"} · 开始于 ${formatDisplayTime(task.liveLog?.startedAt)}`
+      ? `触发方式：${task.liveLog?.trigger || "manual"} · 开始于 ${formatDisplayTime(task.liveLog?.startedAt)} · 下次执行：${nextRunText}`
       : task.lastStatus === "failed"
-        ? `状态：failed · 原因：${failureText} · 最近执行：${task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"}`
-        : `状态：${task.lastStatus} · 最近执行：${task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"}`;
+        ? `状态：failed · 原因：${failureText} · 最近执行：${task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"} · 下次执行：${nextRunText}`
+        : `状态：${task.lastStatus} · 最近执行：${task.lastRunAt ? formatDisplayTime(task.lastRunAt) : "从未执行"} · 下次执行：${nextRunText}`;
 
     const status = node.querySelector(".task-status");
     status.textContent = task.running ? (task.liveLog?.stopRequested ? "终止中" : "运行中") : task.lastStatus;

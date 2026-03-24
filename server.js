@@ -2,6 +2,7 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
+const TimeMatcher = require("node-cron/src/time-matcher");
 const iconv = require("iconv-lite");
 const { spawn, execFile, execFileSync } = require("child_process");
 const {
@@ -21,6 +22,7 @@ const activeProcesses = new Map();
 const activeRunState = new Map();
 
 let serverInstance = null;
+const NEXT_RUN_LOOKAHEAD_MINUTES = 5 * 366 * 24 * 60;
 
 function normalizeTask(payload) {
   const now = new Date().toISOString();
@@ -167,6 +169,35 @@ function scheduleTask(task) {
   });
 
   scheduledJobs.set(task.id, job);
+}
+
+function computeNextRunAt(task, baseDate = new Date()) {
+  if (!task?.enabled || !task?.schedule || !cron.validate(task.schedule)) {
+    return null;
+  }
+
+  const matcher = new TimeMatcher(task.schedule);
+  const nextMinute = new Date(baseDate);
+  nextMinute.setSeconds(0, 0);
+  nextMinute.setMinutes(nextMinute.getMinutes() + 1);
+
+  for (let offset = 0; offset < NEXT_RUN_LOOKAHEAD_MINUTES; offset += 1) {
+    const candidate = new Date(nextMinute.getTime() + offset * 60 * 1000);
+    if (matcher.match(candidate)) {
+      return candidate.toISOString();
+    }
+  }
+
+  return null;
+}
+
+function serializeTask(task) {
+  return {
+    ...task,
+    running: activeProcesses.has(task.id),
+    liveLog: activeRunState.get(task.id) || null,
+    nextRunAt: computeNextRunAt(task),
+  };
 }
 
 function refreshSchedules() {
@@ -719,11 +750,7 @@ function createApp() {
   app.use(express.static(path.join(__dirname, "public")));
 
   app.get("/api/tasks", (_req, res) => {
-    const tasks = getTasks().map((task) => ({
-      ...task,
-      running: activeProcesses.has(task.id),
-      liveLog: activeRunState.get(task.id) || null,
-    }));
+    const tasks = getTasks().map((task) => serializeTask(task));
     res.json(tasks);
   });
 
@@ -732,11 +759,7 @@ function createApp() {
     if (!task) {
       return res.status(404).json({ error: "任务不存在" });
     }
-    return res.json({
-      ...task,
-      running: activeProcesses.has(task.id),
-      liveLog: activeRunState.get(task.id) || null,
-    });
+    return res.json(serializeTask(task));
   });
 
   app.post("/api/tasks", (req, res) => {
