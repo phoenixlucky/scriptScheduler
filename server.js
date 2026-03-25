@@ -18,10 +18,12 @@ const {
 
 const DEFAULT_PORT = Number(process.env.PORT || 3000);
 const scheduledJobs = new Map();
+const triggeredScheduleMinutes = new Map();
 const activeProcesses = new Map();
 const activeRunState = new Map();
 
 let serverInstance = null;
+let scheduleCompensationTimer = null;
 const NEXT_RUN_LOOKAHEAD_MINUTES = 5 * 366 * 24 * 60;
 
 function normalizeTask(payload) {
@@ -154,6 +156,62 @@ function unscheduleTask(taskId) {
     existing.stop();
     scheduledJobs.delete(taskId);
   }
+  triggeredScheduleMinutes.delete(taskId);
+}
+
+function toMinuteDate(date = new Date()) {
+  const minuteDate = new Date(date);
+  minuteDate.setSeconds(0, 0);
+  return minuteDate;
+}
+
+function getMinuteKey(date = new Date()) {
+  return toMinuteDate(date).toISOString();
+}
+
+function hasTriggeredTaskForMinute(taskId, date = new Date()) {
+  return triggeredScheduleMinutes.get(taskId) === getMinuteKey(date);
+}
+
+function markTaskTriggeredForMinute(taskId, date = new Date()) {
+  triggeredScheduleMinutes.set(taskId, getMinuteKey(date));
+}
+
+function triggerScheduledTask(taskId, scheduledAt = new Date()) {
+  if (hasTriggeredTaskForMinute(taskId, scheduledAt)) {
+    return;
+  }
+
+  markTaskTriggeredForMinute(taskId, scheduledAt);
+  runTask(taskId, "scheduled").catch((error) => {
+    console.error(`Task ${taskId} failed:`, error);
+  });
+}
+
+function checkMissedSchedules(now = new Date()) {
+  const currentMinute = toMinuteDate(now);
+
+  for (const task of getTasks()) {
+    if (!task?.enabled || !task?.schedule || !cron.validate(task.schedule)) {
+      continue;
+    }
+
+    const matcher = new TimeMatcher(task.schedule);
+    if (matcher.match(currentMinute)) {
+      triggerScheduledTask(task.id, currentMinute);
+    }
+  }
+}
+
+function startScheduleCompensation() {
+  if (scheduleCompensationTimer) {
+    clearInterval(scheduleCompensationTimer);
+  }
+
+  checkMissedSchedules();
+  scheduleCompensationTimer = setInterval(() => {
+    checkMissedSchedules();
+  }, 30 * 1000);
 }
 
 function scheduleTask(task) {
@@ -163,9 +221,7 @@ function scheduleTask(task) {
   }
 
   const job = cron.schedule(task.schedule, () => {
-    runTask(task.id, "scheduled").catch((error) => {
-      console.error(`Task ${task.id} failed:`, error);
-    });
+    triggerScheduledTask(task.id);
   });
 
   scheduledJobs.set(task.id, job);
@@ -204,6 +260,8 @@ function refreshSchedules() {
   for (const task of getTasks()) {
     scheduleTask(task);
   }
+
+  startScheduleCompensation();
 }
 
 function backfillTaskErrors() {
@@ -949,6 +1007,11 @@ function stopServer() {
   }
 
   return new Promise((resolve, reject) => {
+    if (scheduleCompensationTimer) {
+      clearInterval(scheduleCompensationTimer);
+      scheduleCompensationTimer = null;
+    }
+
     serverInstance.close((error) => {
       if (error) {
         reject(error);
