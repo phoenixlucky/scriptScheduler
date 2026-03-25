@@ -1,8 +1,18 @@
-# WeiScheduler 定时任务
+# WeiScheduler（尉定时任务调度器）
 
-一个基于 npm 启动的网页端调度器，用来配置指定 Python 环境中的指定脚本，并按 Cron 时间表达式执行。
+WeiScheduler 是一个基于 Node.js 的本地网页调度工具，用于按 Cron 表达式定时执行 Python 脚本。支持多种 Python/Conda 环境配置，适用于数据处理、自动化任务和脚本调度场景。
 
-当前版本：`1.1.10`
+English:
+WeiScheduler is a web-based local task scheduler built on Node.js, designed to execute Python scripts based on Cron expressions. It supports multiple Python and Conda environment configurations, making it suitable for data processing, automation workflows, and scheduled scripting tasks.
+
+当前版本：`1.2.1`
+Latest Version: `1.2.1`
+
+核心定位：
+一个轻量级、本地优先的 Python 定时任务调度器，强调环境兼容性和可视化管理。
+
+Core Positioning:
+A lightweight, local-first Python task scheduler focused on environment compatibility and visual management.
 
 版本更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
@@ -14,13 +24,27 @@
 - 可选配置时间参数名称和值，执行时自动追加到命令行
 - 启用或禁用调度
 - 立即手动执行任务
+- 支持最小化到系统托盘，关闭窗口后继续后台调度
 - 手动执行失败时，弹窗显示具体错误内容
 - 任务列表直接显示最近失败原因
+- 任务列表和详情显示“下次执行时间”
 - 保存最近运行日志和状态
 - 使用本地 `data/tasks.json` 持久化任务数据
 - Conda 环境名支持跨机器解析，优先读取 Conda 环境列表，不依赖固定用户名和固定盘符
+- Windows 安装器按系统语言显示名称：英文环境 `WeiScheduler`，中文环境 `尉定时任务调度器`
 
 ## 版本亮点
+
+`1.2.1`：
+
+- 新增最小化到系统托盘能力，关闭窗口后调度器仍可在后台继续运行
+- 补充软件中英文简介、核心定位和版本说明，统一更新关于页元数据
+- 安装器按系统语言显示名称：英文环境为 `WeiScheduler`，中文环境为 `尉定时任务调度器`
+
+`1.2.0`：
+
+- 修复跨小时 Cron 任务稳定性问题，为 `每 3 小时`、`每 6 小时` 等表达式增加服务端补偿触发
+- 新增 `每 6 小时` 预设，并在任务列表中显示对应的人类可读描述
 
 `1.1.10`：
 
@@ -64,6 +88,8 @@ npm run build:installer
 
 - `*/5 * * * *`: 每 5 分钟执行一次
 - `0 * * * *`: 每小时整点执行
+- `0 */3 * * *`: 每 3 小时执行一次
+- `0 */6 * * *`: 每 6 小时执行一次
 - `0 9 * * 1-5`: 工作日 09:00 执行
 - `30 23 * * *`: 每天 23:30 执行
 
