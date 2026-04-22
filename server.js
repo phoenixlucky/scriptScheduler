@@ -979,18 +979,29 @@ function startServer({ port = DEFAULT_PORT, retries = 20 } = {}) {
   const app = createApp();
 
   return new Promise((resolve, reject) => {
-    const tryListen = (candidatePort, retriesLeft) => {
+    const tryListen = (candidatePort, retriesLeft, hasFallenBackToDynamicPort = false) => {
       const server = app.listen(candidatePort, () => {
         serverInstance = server;
-        console.log(`Scheduler running at http://localhost:${candidatePort}`);
-        resolve({ server, port: candidatePort });
+        const actualPort = server.address().port;
+        console.log(`Scheduler running at http://localhost:${actualPort}`);
+        resolve({ server, port: actualPort });
       });
 
-      server.on("error", (error) => {
-        if (error.code === "EADDRINUSE" && retriesLeft > 0) {
-          console.warn(`Port ${candidatePort} is in use, retrying with ${candidatePort + 1}`);
-          tryListen(candidatePort + 1, retriesLeft - 1);
-          return;
+      server.once("error", (error) => {
+        server.close(() => {});
+
+        if (error.code === "EADDRINUSE") {
+          if (!hasFallenBackToDynamicPort) {
+            console.warn(`Port ${candidatePort} is in use, retrying with a dynamic free port`);
+            tryListen(0, retriesLeft, true);
+            return;
+          }
+
+          if (retriesLeft > 0) {
+            console.warn("Dynamic port allocation failed, retrying");
+            tryListen(0, retriesLeft - 1, true);
+            return;
+          }
         }
 
         reject(error);

@@ -9,20 +9,50 @@ function getDataPaths() {
   };
 }
 
+function createEmptyStore() {
+  return { tasks: [] };
+}
+
 function ensureStore() {
   const { dataDir, storeFile } = getDataPaths();
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
   }
   if (!fs.existsSync(storeFile)) {
-    fs.writeFileSync(storeFile, JSON.stringify({ tasks: [] }, null, 2), "utf8");
+    fs.writeFileSync(storeFile, JSON.stringify(createEmptyStore(), null, 2), "utf8");
   }
+}
+
+function isValidStore(store) {
+  return Boolean(store) && typeof store === "object" && Array.isArray(store.tasks);
+}
+
+function backupBrokenStore(storeFile, rawContent) {
+  const backupFile = `${storeFile}.broken-${Date.now()}.json`;
+  fs.writeFileSync(backupFile, rawContent, "utf8");
+  return backupFile;
 }
 
 function readStore() {
   const { storeFile } = getDataPaths();
   ensureStore();
-  return JSON.parse(fs.readFileSync(storeFile, "utf8"));
+  const rawContent = fs.readFileSync(storeFile, "utf8");
+
+  try {
+    const store = JSON.parse(rawContent);
+    if (!isValidStore(store)) {
+      throw new Error("tasks.json 缺少 tasks 数组");
+    }
+    return store;
+  } catch (error) {
+    const backupFile = backupBrokenStore(storeFile, rawContent);
+    const emptyStore = createEmptyStore();
+    fs.writeFileSync(storeFile, JSON.stringify(emptyStore, null, 2), "utf8");
+    console.error(
+      `Failed to parse store file "${storeFile}". Backed up invalid content to "${backupFile}": ${error.message}`
+    );
+    return emptyStore;
+  }
 }
 
 function writeStore(store) {

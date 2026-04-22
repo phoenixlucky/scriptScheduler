@@ -5,8 +5,8 @@ WeiScheduler 是一个基于 Node.js 的本地网页调度工具，用于按 Cro
 English:
 WeiScheduler is a web-based local task scheduler built on Node.js, designed to execute Python scripts based on Cron expressions. It supports multiple Python and Conda environment configurations, making it suitable for data processing, automation workflows, and scheduled scripting tasks.
 
-当前版本：`1.2.1`
-Latest Version: `1.2.1`
+当前版本：`1.2.2`
+Latest Version: `1.2.2`
 
 核心定位：
 一个轻量级、本地优先的 Python 定时任务调度器，强调环境兼容性和可视化管理。
@@ -34,6 +34,11 @@ A lightweight, local-first Python task scheduler focused on environment compatib
 - Windows 安装器按系统语言显示名称：英文环境 `WeiScheduler`，中文环境 `尉定时任务调度器`
 
 ## 版本亮点
+
+`1.2.2`：
+
+- 修复任务数据文件损坏时桌面端启动直接失败的问题，损坏数据会自动备份并重建空任务库
+- 补充 README 中的清理旧产物与 Windows 安装包打包指令
 
 `1.2.1`：
 
@@ -64,13 +69,25 @@ npm install
 npm start
 ```
 
-打开 `http://localhost:3000`
+Web 开发模式默认从 `http://localhost:3000` 启动；如果 `3000` 已被占用，程序会自动切换到可用端口。
 
-构建 Windows 安装包：
+桌面版会自动打开实际运行端口对应的页面，无需手动处理端口。
+
+开发模式下，Electron 会直接加载本地源码。
+
+重新构建 Windows 安装包前，建议先清理旧产物：
+
+```bash
+Remove-Item -Recurse -Force release, dist
+```
+
+然后执行打包：
 
 ```bash
 npm run build:installer
 ```
+
+打包完成后，安装包和解包目录会生成在 `release/` 下。
 
 ## 字段说明
 
